@@ -10,7 +10,7 @@ from nengo.learning_rules import BCM, Oja, PES
 
 
 class SimBCM(Operator):
-    """Change the transform according to the BCM rule."""
+    """Change the weights according to the BCM rule."""
     def __init__(self, pre_filtered, post_filtered, theta, delta,
                  learning_rate):
         self.post_filtered = post_filtered
@@ -38,23 +38,23 @@ class SimBCM(Operator):
 
 
 class SimOja(Operator):
-    """Change the transform according to the OJA rule."""
-    def __init__(self, pre_filtered, post_filtered, transform, delta,
+    """Change the weights according to the OJA rule."""
+    def __init__(self, pre_filtered, post_filtered, weights, delta,
                  learning_rate, beta):
         self.post_filtered = post_filtered
         self.pre_filtered = pre_filtered
-        self.transform = transform
+        self.weights = weights
         self.delta = delta
         self.learning_rate = learning_rate
         self.beta = beta
 
         self.sets = [delta]
         self.incs = []
-        self.reads = [pre_filtered, post_filtered, transform]
+        self.reads = [pre_filtered, post_filtered, weights]
         self.updates = []
 
     def make_step(self, signals, dt, rng):
-        transform = signals[self.transform]
+        weights = signals[self.weights]
         pre_filtered = signals[self.pre_filtered]
         post_filtered = signals[self.post_filtered]
         delta = signals[self.delta]
@@ -64,7 +64,7 @@ class SimOja(Operator):
         def step():
             # perform forgetting
             post_squared = alpha * post_filtered * post_filtered
-            delta[...] = -beta * transform * post_squared[:, None]
+            delta[...] = -beta * weights * post_squared[:, None]
 
             # perform update
             delta[...] += np.outer(alpha * post_filtered, pre_filtered)
@@ -85,7 +85,7 @@ def build_bcm(model, bcm, rule):
            else conn.pre_obj.ensemble)
     post = (conn.post_obj if isinstance(conn.post_obj, Ensemble)
             else conn.post_obj.ensemble)
-    transform = model.sig[conn]['transform']
+    weights = model.sig[conn]['weights']
     pre_activities = model.sig[pre.neurons]['out']
     post_activities = model.sig[post.neurons]['out']
     pre_filtered = filtered_signal(model, bcm, pre_activities, bcm.pre_tau)
@@ -97,8 +97,8 @@ def build_bcm(model, bcm, rule):
     model.add_op(SimBCM(pre_filtered, post_filtered, theta, delta,
                         learning_rate=bcm.learning_rate))
     model.add_op(ElementwiseInc(
-        model.sig['common'][1], delta, transform, as_update=True,
-        tag="BCM: Inc Transform"))
+        model.sig['common'][1], delta, weights, as_update=True,
+        tag="BCM: Inc Weights"))
 
     # expose these for probes
     model.sig[rule]['theta'] = theta
@@ -115,7 +115,7 @@ def build_oja(model, oja, rule):
            else conn.pre_obj.ensemble)
     post = (conn.post_obj if isinstance(conn.post_obj, Ensemble)
             else conn.post_obj.ensemble)
-    transform = model.sig[conn]['transform']
+    weights = model.sig[conn]['weights']
     pre_activities = model.sig[pre.neurons]['out']
     post_activities = model.sig[post.neurons]['out']
     pre_filtered = filtered_signal(model, oja, pre_activities, oja.pre_tau)
@@ -123,11 +123,11 @@ def build_oja(model, oja, rule):
     delta = Signal(np.zeros((post.n_neurons, pre.n_neurons)),
                    name='Oja: Delta')
 
-    model.add_op(SimOja(pre_filtered, post_filtered, transform, delta,
+    model.add_op(SimOja(pre_filtered, post_filtered, weights, delta,
                         learning_rate=oja.learning_rate, beta=oja.beta))
     model.add_op(ElementwiseInc(
-        model.sig['common'][1], delta, transform, as_update=True,
-        tag="Oja: Inc Transform"))
+        model.sig['common'][1], delta, weights, as_update=True,
+        tag="Oja: Inc Weights"))
 
     # expose these for probes
     model.sig[rule]['pre_filtered'] = pre_filtered
@@ -165,27 +165,22 @@ def build_pes(model, pes, rule):
             isinstance(conn.post_obj, Neurons)):
         post = (conn.post_obj.ensemble if isinstance(conn.post_obj, Neurons)
                 else conn.post_obj)
-        transform = model.sig[conn]['transform']
+        weights = model.sig[conn]['weights']
         encoders = model.sig[post]['encoders']
 
-        encoded = Signal(np.zeros(transform.shape[0]), name="PES:encoded")
+        encoded = Signal(np.zeros(weights.shape[0]), name="PES:encoded")
         model.add_op(Reset(encoded))
         model.add_op(DotInc(encoders, correction, encoded, tag="PES:encode"))
 
         encoded_view = encoded.reshape((encoded.size, 1))
         model.add_op(ElementwiseInc(
-            encoded_view, acts_view, transform, as_update=True,
-            tag="PES:Inc Transform"))
-    elif isinstance(conn.pre_obj, Neurons):
-        transform = model.sig[conn]['transform']
+            encoded_view, acts_view, weights, as_update=True,
+            tag="PES:Inc Weights"))
+    elif isinstance(conn.pre_obj, (Neurons, Ensemble)):
+        weights = model.sig[conn]['weights']
         model.add_op(ElementwiseInc(
-            correction_view, acts_view, transform, as_update=True,
-            tag="PES:Inc Transform"))
-    elif isinstance(conn.pre_obj, Ensemble):
-        decoders = model.sig[conn]['decoders']
-        model.add_op(ElementwiseInc(
-            correction_view, acts_view, decoders, as_update=True,
-            tag="PES:Inc Decoder"))
+            correction_view, acts_view, weights, as_update=True,
+            tag="PES:Inc Weights"))
     else:
         raise ValueError("'pre' object '%s' not suitable for PES learning"
                          % (conn.pre_obj))
